@@ -1,10 +1,26 @@
+# Ignore user-installed libraries
 PRU_IoT_Robotics_Course_Workshop/
-.vscode/
-*.exe
+libraries/
+
+
+# Arduino build output
+*.elf
+*.hex
+*.bin
+*.eep
+*.map
+*.d
 *.o
-*.obj
-*.log
-*.user
-*.DS_Store
-build/
-cmake-build*/
+*.a
+*.pyc
+*.class
+
+# VSCode + PlatformIO
+.vscode/
+.pio/
+
+# Mac/Linux/Windows
+.DS_Store
+Thumbs.db
+*.swp
+__pycache__/
