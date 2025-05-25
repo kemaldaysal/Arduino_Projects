@@ -1,0 +1,15 @@
+Wheel Dimension
+
+22.3 mm total - 1 mm cloth tape = 21.3 mm raw wheel
+
+Wheel Thickness
+12.36 mm
+
+Line Length: 2.7 mm 
+Line Width: 1.6 mm --> 1.8 mm Width for other wheels: tight but 2.45 ?
+Line Height 2.5 --> 2.6 mm
+Filled area between lines 4 mm
+
+Circumference: 2*pi*r = 2*pi*10.65 = 66.882
+
+66.882 / (2.7+4) = 9.982

@@ -1,0 +1,10 @@
+PRU_IoT_Robotics_Course_Workshop/
+.vscode/
+*.exe
+*.o
+*.obj
+*.log
+*.user
+*.DS_Store
+build/
+cmake-build*/
