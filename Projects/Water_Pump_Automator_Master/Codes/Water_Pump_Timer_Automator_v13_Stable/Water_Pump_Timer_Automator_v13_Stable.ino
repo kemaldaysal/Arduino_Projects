@@ -1,10 +1,10 @@
 #include <stdint.h>
 
 // ---------------------- Feature Config
-#define LEVEL_SENSOR_ENABLED true
-#define POT_ENABLED true
+#define LEVEL_SENSOR_ENABLED false
+#define POT_ENABLED false
 
-#define DEBUG_MODE_ENABLED true
+#define DEBUG_MODE_ENABLED false
 #define FAST_TEST_MODE_ENABLED false
 
 // ---------------------- Serial Logging
@@ -25,9 +25,9 @@ constexpr uint32_t MIN_TO_MS = 60000;
 }
 
 namespace S_TIMERS {
-constexpr uint32_t STARTUP_DELAY_MS = 3000;
+constexpr uint32_t STARTUP_DELAY_MS = 19 * CONVERSIONS::MIN_TO_MS; // changed from 3 s to 20 min
 constexpr uint32_t TIME_ON_S = 33;
-constexpr uint32_t TIME_OFF_MIN = 15;
+constexpr uint32_t TIME_OFF_MIN = 19; // 15 -> 20
 constexpr uint32_t FT_TIME_ON_S = 4;
 constexpr uint32_t FT_TIME_OFF_S = 4;
 constexpr uint32_t POT_READ_INTERVAL = 30 * CONVERSIONS::SEC_TO_MS;
@@ -44,8 +44,8 @@ constexpr uint16_t SCALE = MAX / RANGES;
 }
 
 namespace PIN {
-constexpr uint8_t RELAY = 3;  // In Nano (latest system)
-//constexpr uint8_t RELAY = 6; // In Uno (current system)
+//constexpr uint8_t RELAY = 3;  // In Nano (latest system)
+constexpr uint8_t RELAY = 6; // In Uno (current system)
 constexpr uint8_t POT = A7;
 constexpr uint8_t LEVEL_SENSOR = 2;
 constexpr uint8_t LED_LEVEL = LED_BUILTIN;
