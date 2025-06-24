@@ -1,11 +1,12 @@
 #include <stdint.h>
+#include <avr/wdt.h>  // Watchdog support
 
 // ---------------------- Feature Config
-#define LEVEL_SENSOR_ENABLED false
+#define LEVEL_SENSOR_ENABLED true
 #define POT_ENABLED false
 
-#define DEBUG_MODE_ENABLED false
-#define FAST_TEST_MODE_ENABLED false
+#define DEBUG_MODE_ENABLED true
+#define FAST_TEST_MODE_ENABLED true
 
 // ---------------------- Serial Logging
 #if DEBUG_MODE_ENABLED
@@ -25,9 +26,10 @@ constexpr uint32_t MIN_TO_MS = 60000;
 }
 
 namespace S_TIMERS {
-constexpr uint32_t STARTUP_DELAY_MS = 19 * CONVERSIONS::MIN_TO_MS; // changed from 3 s to 20 min
+constexpr uint32_t STARTUP_DELAY_MS = 19 * CONVERSIONS::MIN_TO_MS;  // changed from 3 s to 20 min
+constexpr uint32_t STARTUP_DELAY_FAST_TEST = 3 * CONVERSIONS::SEC_TO_MS;
 constexpr uint32_t TIME_ON_S = 33;
-constexpr uint32_t TIME_OFF_MIN = 19; // 15 -> 20
+constexpr uint32_t TIME_OFF_MIN = 19;  // 15 -> 20
 constexpr uint32_t FT_TIME_ON_S = 4;
 constexpr uint32_t FT_TIME_OFF_S = 4;
 constexpr uint32_t POT_READ_INTERVAL = 30 * CONVERSIONS::SEC_TO_MS;
@@ -44,16 +46,18 @@ constexpr uint16_t SCALE = MAX / RANGES;
 }
 
 namespace PIN {
-//constexpr uint8_t RELAY = 3;  // In Nano (latest system)
-constexpr uint8_t RELAY = 6; // In Uno (current system)
+constexpr uint8_t RELAY = 3;  // In Nano (latest system)
+// constexpr uint8_t RELAY = 6;  // In Uno (current system)
 constexpr uint8_t POT = A7;
 constexpr uint8_t LEVEL_SENSOR = 2;
 constexpr uint8_t LED_LEVEL = LED_BUILTIN;
 }
 
 namespace RELAY {
-constexpr bool ON = HIGH;
-constexpr bool OFF = LOW;
+constexpr bool ON = LOW;    // For Nano with new relay
+constexpr bool OFF = HIGH;  // For Nano with new relay
+// constexpr bool ON = HIGH; // For Uno with older relay
+// constexpr bool OFF = LOW; // For Uno with older relay
 }
 
 // ---------------------- Global State
@@ -65,6 +69,8 @@ SystemState currentState = SystemState::STARTUP;
 
 uint32_t lastStateChange = 0;
 uint32_t potLastReadTime = 0;
+uint32_t startupBeginTime = 0;
+bool startupDelayDone = false;
 
 #if (!POT_ENABLED || FAST_TEST_MODE_ENABLED)
 uint32_t currentTimeOff = S_TIMERS::TIME_OFF_MIN * CONVERSIONS::MIN_TO_MS;
@@ -73,7 +79,6 @@ uint32_t currentTimeOff = 0;  // Will be set from analogRead()
 #endif
 
 constexpr uint8_t SIZE_BUF = 100;
-
 char buf[SIZE_BUF];
 
 static inline uint32_t getTimeOn();
@@ -82,6 +87,8 @@ void logDebug(unsigned long now, unsigned long currentTimeOff);
 
 // ---------------------- Setup
 void setup() {
+  wdt_enable(WDTO_8S);  // Watchdog: reset if loop stalls for 8 seconds
+
   pinMode(PIN::RELAY, OUTPUT);
   pinMode(PIN::LED_LEVEL, OUTPUT);
 #if (POT_ENABLED && (!FAST_TEST_MODE_ENABLED))
@@ -93,29 +100,44 @@ void setup() {
 
   digitalWrite(PIN::RELAY, RELAY::OFF);
   digitalWrite(PIN::LED_LEVEL, LOW);
+  currentState = SystemState::STARTUP;
+
 
   LOG_BEGIN(9600);
-  LOG_LN("System booting...");
+  LOG_LN("System booted. Non-blocking startup delay initialized.");
 
-  delay(S_TIMERS::STARTUP_DELAY_MS);
-  lastStateChange = millis();
-
-  currentTimeOff = getTimeOff(
-#if (POT_ENABLED && (!FAST_TEST_MODE_ENABLED))
-    analogRead(PIN::POT)
-#else
-    0
-#endif
-  );
-
-  currentState = SystemState::PUMP_ON;
-  digitalWrite(PIN::RELAY, RELAY::ON);
-  LOG_LN("Pump ON after startup.");
+  startupBeginTime = millis();
 }
 
 // ---------------------- Loop
 void loop() {
+  wdt_reset();  // reset watchdog
+
   uint32_t now = millis();
+
+  if (!startupDelayDone) {
+#if FAST_TEST_MODE_ENABLED
+    if (now - startupBeginTime >= S_TIMERS::STARTUP_DELAY_FAST_TEST) {
+#else
+    if (now - startupBeginTime >= S_TIMERS::STARTUP_DELAY_MS) {
+#endif
+      startupDelayDone = true;
+      LOG_LN("Startup delay finished. Pump ON begins.");
+
+      currentTimeOff = getTimeOff(
+#if (POT_ENABLED && (!FAST_TEST_MODE_ENABLED))
+        analogRead(PIN::POT)
+#else
+        0
+#endif
+      );
+
+      currentState = SystemState::PUMP_ON;
+      digitalWrite(PIN::RELAY, RELAY::ON);
+      lastStateChange = now;
+    }
+    return;  // Still waiting for startup delay to finish
+  }
 
 #if (POT_ENABLED && (!FAST_TEST_MODE_ENABLED))
   if ((now - potLastReadTime) >= S_TIMERS::POT_READ_INTERVAL) {
@@ -209,16 +231,18 @@ void logDebug(unsigned long now, unsigned long currentTimeOff) {
 #endif
 
 #if FAST_TEST_MODE_ENABLED
-uint32_t toffDisplay = currentTimeOff / CONVERSIONS::SEC_TO_MS;
-const char* unit = "sec";
+    uint32_t toffDisplay = currentTimeOff / CONVERSIONS::SEC_TO_MS;
+    const char* unit = "sec";
+    uint32_t current_time_final_to_display = (now - S_TIMERS::STARTUP_DELAY_FAST_TEST) / CONVERSIONS::SEC_TO_MS;
 #else
-uint32_t toffDisplay = currentTimeOff / CONVERSIONS::MIN_TO_MS;
-const char* unit = "min";
+    uint32_t toffDisplay = currentTimeOff / CONVERSIONS::MIN_TO_MS;
+    const char* unit = "min";
+    uint32_t current_time_final_to_display = (now - S_TIMERS::STARTUP_DELAY_MS) / CONVERSIONS::SEC_TO_MS;
 #endif
 
     snprintf(buf, sizeof(buf),
              "[%lus] State:%d | Relay:%d | Level:%d | Pot:%d | T_off:%lu %s",
-             (now - S_TIMERS::STARTUP_DELAY_MS) / CONVERSIONS::SEC_TO_MS,
+             current_time_final_to_display,
              static_cast<int>(currentState),
              digitalRead(PIN::RELAY),
              level,
