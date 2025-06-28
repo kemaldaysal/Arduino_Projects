@@ -4,7 +4,7 @@
 #define LEVEL_SENSOR_ENABLED false
 #define POT_ENABLED false
 
-#define DEBUG_MODE_ENABLED true
+#define DEBUG_MODE_ENABLED false
 #define FAST_TEST_MODE_ENABLED false
 
 // ---------------------- Serial Logging
@@ -25,10 +25,10 @@ constexpr uint32_t MIN_TO_MS = 60000;
 }
 
 namespace S_TIMERS {
-constexpr uint32_t STARTUP_DELAY_MS = 19 * CONVERSIONS::MIN_TO_MS;        // changed from 3 s to 20 min
+constexpr uint32_t STARTUP_DELAY_MS = 16 * CONVERSIONS::MIN_TO_MS; // 19 -> 16
 constexpr uint32_t STARTUP_DELAY_FAST_TEST = 3 * CONVERSIONS::SEC_TO_MS; 
 constexpr uint32_t TIME_ON_S = 33;
-constexpr uint32_t TIME_OFF_MIN = 19;  // 15 -> 20
+constexpr uint32_t TIME_OFF_MIN = 16;  // 15 -> 19 -> 16
 constexpr uint32_t FT_TIME_ON_S = 4;
 constexpr uint32_t FT_TIME_OFF_S = 4;
 constexpr uint32_t POT_READ_INTERVAL = 30 * CONVERSIONS::SEC_TO_MS;
@@ -60,6 +60,7 @@ constexpr bool OFF = HIGH; // For Nano with new relay
 }
 
 constexpr uint8_t SIZE_BUF = 100;
+char buf[SIZE_BUF];
 
 // ---------------------- Global State
 enum class SystemState : uint8_t { STARTUP,
@@ -229,12 +230,11 @@ void logDebug(unsigned long now, unsigned long currentTimeOff) {
     uint32_t current_time_final_to_display = (now - S_TIMERS::STARTUP_DELAY_MS) / CONVERSIONS::SEC_TO_MS;
 #endif
 
-    char buf[SIZE_BUF];
     snprintf(buf, sizeof(buf),
              "[%lus] State:%d | Relay:%d | Level:%d | Pot:%d | T_off:%lu %s",
              current_time_final_to_display,
              static_cast<int>(currentState),
-             digitalRead(PIN::RELAY),
+             !(digitalRead(PIN::RELAY)),
              level,
              POT_ENABLED ? analogRead(PIN::POT) : -1,
              toffDisplay,

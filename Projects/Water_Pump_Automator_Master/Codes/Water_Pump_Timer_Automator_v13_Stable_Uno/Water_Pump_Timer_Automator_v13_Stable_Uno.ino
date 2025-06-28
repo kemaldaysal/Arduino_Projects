@@ -2,8 +2,9 @@
 
 // ---------------------- Feature Config
 #define LEVEL_SENSOR_ENABLED false
-#define POT_ENABLED true
-#define DEBUG_MODE_ENABLED true
+#define POT_ENABLED false
+
+#define DEBUG_MODE_ENABLED false
 #define FAST_TEST_MODE_ENABLED false
 
 // ---------------------- Serial Logging
@@ -24,15 +25,17 @@ constexpr uint32_t MIN_TO_MS = 60000;
 }
 
 namespace S_TIMERS {
-constexpr uint32_t STARTUP_DELAY_MS = 3000;
+constexpr uint32_t STARTUP_DELAY_MS = 16 * CONVERSIONS::MIN_TO_MS; // 19 -> 16
+constexpr uint32_t STARTUP_DELAY_FAST_TEST = 3 * CONVERSIONS::SEC_TO_MS; 
 constexpr uint32_t TIME_ON_S = 33;
-constexpr uint32_t TIME_OFF_MIN = 15;
+constexpr uint32_t TIME_OFF_MIN = 19;  // 15 -> 19 -> 16 -> 19
 constexpr uint32_t FT_TIME_ON_S = 4;
 constexpr uint32_t FT_TIME_OFF_S = 4;
 constexpr uint32_t POT_READ_INTERVAL = 30 * CONVERSIONS::SEC_TO_MS;
-constexpr uint32_t TIME_OFF_OPT1 = 5;
-constexpr uint32_t TIME_OFF_OPT2 = 10;
-constexpr uint32_t TIME_OFF_ANTIFREEZE = 30;
+constexpr uint32_t TIME_OFF_OPT1_MIN = 5;
+constexpr uint32_t TIME_OFF_OPT2_MIN = 10;
+constexpr uint32_t TIME_OFF_ANTIFREEZE_MIN = 30;
+constexpr uint32_t INTERVAL_DEBUG_LOG = 1000;
 }
 
 namespace POT {
@@ -42,32 +45,41 @@ constexpr uint16_t SCALE = MAX / RANGES;
 }
 
 namespace PIN {
-constexpr uint8_t RELAY = 3;
+//constexpr uint8_t RELAY = 3;  // In Nano (latest system)
+constexpr uint8_t RELAY = 6;  // In Uno (current system)
 constexpr uint8_t POT = A7;
 constexpr uint8_t LEVEL_SENSOR = 2;
 constexpr uint8_t LED_LEVEL = LED_BUILTIN;
 }
 
 namespace RELAY {
-constexpr bool ON = HIGH;
-constexpr bool OFF = LOW;
+constexpr bool ON = LOW; // For Nano with new relay
+constexpr bool OFF = HIGH; // For Nano with new relay
+// constexpr bool ON = HIGH; // For Uno with older relay
+// constexpr bool OFF = LOW; // For Uno with older relay
 }
 
+constexpr uint8_t SIZE_BUF = 100;
+char buf[SIZE_BUF];
+
 // ---------------------- Global State
-enum SystemState { STARTUP,
-                   PUMP_ON,
-                   PUMP_OFF,
-                   TANK_FULL_WAIT };
-SystemState currentState = STARTUP;
+enum class SystemState : uint8_t { STARTUP,
+                                   PUMP_ON,
+                                   PUMP_OFF,
+                                   TANK_FULL_WAIT };
+SystemState currentState = SystemState::STARTUP;
 
 uint32_t lastStateChange = 0;
 uint32_t potLastReadTime = 0;
+
+#if (!POT_ENABLED || FAST_TEST_MODE_ENABLED)
 uint32_t currentTimeOff = S_TIMERS::TIME_OFF_MIN * CONVERSIONS::MIN_TO_MS;
+#else
+uint32_t currentTimeOff = 0;  // Will be set from analogRead()
+#endif
 
-char buf[100];
-
-uint32_t getTimeOn();
-uint32_t getTimeOff(uint16_t potValue);
+static inline uint32_t getTimeOn();
+static inline uint32_t getTimeOff(uint16_t potValue);
 void logDebug(unsigned long now, unsigned long currentTimeOff);
 
 // ---------------------- Setup
@@ -85,9 +97,19 @@ void setup() {
   digitalWrite(PIN::LED_LEVEL, LOW);
 
   LOG_BEGIN(9600);
-  LOG_LN("System booting...");
+  LOG_LN("System booted");
+  LOG("Starting startup delay for ");
 
+#if (FAST_TEST_MODE_ENABLED)
+  LOG(S_TIMERS::STARTUP_DELAY_FAST_TEST);
+  delay(S_TIMERS::STARTUP_DELAY_FAST_TEST);
+#else
+  LOG(S_TIMERS::STARTUP_DELAY_MS);
   delay(S_TIMERS::STARTUP_DELAY_MS);
+#endif
+
+    LOG_LN(" milliseconds");
+
   lastStateChange = millis();
 
   currentTimeOff = getTimeOff(
@@ -98,7 +120,7 @@ void setup() {
 #endif
   );
 
-  currentState = PUMP_ON;
+  currentState = SystemState::PUMP_ON;
   digitalWrite(PIN::RELAY, RELAY::ON);
   LOG_LN("Pump ON after startup.");
 }
@@ -107,14 +129,8 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
-#if LEVEL_SENSOR_ENABLED
-  bool tankFull = digitalRead(PIN::LEVEL_SENSOR);
-  digitalWrite(PIN::LED_LEVEL, tankFull ? HIGH : LOW);
-#endif
-
 #if (POT_ENABLED && (!FAST_TEST_MODE_ENABLED))
-  //LOG_LN(currentTimeOff); // THIS IS TRIGGERED, results always 37856
-  if ((now - potLastReadTime) >= S_TIMERS::POT_READ_INTERVAL) {  // FIX HERE
+  if ((now - potLastReadTime) >= S_TIMERS::POT_READ_INTERVAL) {
     potLastReadTime = now;
     currentTimeOff = getTimeOff(analogRead(PIN::POT));
   }
@@ -124,42 +140,41 @@ void loop() {
 
   // LEVEL FULL check (interrupt pump operation immediately)
 #if LEVEL_SENSOR_ENABLED
-  if (tankFull && currentState != TANK_FULL_WAIT) {
+  bool tankFull = digitalRead(PIN::LEVEL_SENSOR);
+  digitalWrite(PIN::LED_LEVEL, tankFull ? HIGH : LOW);
+
+  if (tankFull && (currentState != SystemState::TANK_FULL_WAIT)) {
     digitalWrite(PIN::RELAY, RELAY::OFF);
     digitalWrite(PIN::LED_LEVEL, HIGH);
-    currentState = TANK_FULL_WAIT;
+    currentState = SystemState::TANK_FULL_WAIT;
     LOG_LN("Tank full! Pump stopped.");
     return;
   }
-#endif
 
   // If previously full, wait until it's not full
-#if LEVEL_SENSOR_ENABLED
-  if (currentState == TANK_FULL_WAIT) {
-    if (!tankFull) {
-      lastStateChange = now;
-      currentState = PUMP_OFF;
-      LOG_LN("Tank not full anymore. Entering T_off delay.");
-    }
+  if ((currentState == SystemState::TANK_FULL_WAIT) && !tankFull) {
+    lastStateChange = now;
+    currentState = SystemState::PUMP_OFF;
+    LOG_LN("Tank not full anymore. Entering T_off delay.");
     return;
   }
 #endif
 
   switch (currentState) {
-    case PUMP_ON:
+    case SystemState::PUMP_ON:
       if (now - lastStateChange >= getTimeOn()) {
         digitalWrite(PIN::RELAY, RELAY::OFF);
         lastStateChange = now;
-        currentState = PUMP_OFF;
+        currentState = SystemState::PUMP_OFF;
         LOG_LN("Pump OFF. Entering T_off delay.");
       }
       break;
 
-    case PUMP_OFF:
+    case SystemState::PUMP_OFF:
       if (now - lastStateChange >= currentTimeOff) {
         digitalWrite(PIN::RELAY, RELAY::ON);
         lastStateChange = now;
-        currentState = PUMP_ON;
+        currentState = SystemState::PUMP_ON;
         LOG_LN("Pump ON. Entering T_on duration.");
       }
       break;
@@ -170,23 +185,23 @@ void loop() {
 }
 
 // ---------------------- Time Functions
-uint32_t getTimeOn() {
+static inline uint32_t getTimeOn() {
 #if FAST_TEST_MODE_ENABLED
   return S_TIMERS::FT_TIME_ON_S * CONVERSIONS::SEC_TO_MS;
 #else
   return S_TIMERS::TIME_ON_S * CONVERSIONS::SEC_TO_MS;
 #endif
 }
-uint32_t getTimeOff(uint16_t potValue) {
+static inline uint32_t getTimeOff(uint16_t potValue) {
 #if (FAST_TEST_MODE_ENABLED)
   return S_TIMERS::FT_TIME_OFF_S * CONVERSIONS::SEC_TO_MS;
 #elif (POT_ENABLED && (!FAST_TEST_MODE_ENABLED))
   if (potValue < POT::SCALE)
-    return S_TIMERS::TIME_OFF_OPT1 * CONVERSIONS::MIN_TO_MS;
+    return S_TIMERS::TIME_OFF_OPT1_MIN * CONVERSIONS::MIN_TO_MS;
   else if (potValue < 2 * POT::SCALE)
-    return S_TIMERS::TIME_OFF_OPT2 * CONVERSIONS::MIN_TO_MS;
+    return S_TIMERS::TIME_OFF_OPT2_MIN * CONVERSIONS::MIN_TO_MS;
   else
-    return S_TIMERS::TIME_OFF_ANTIFREEZE * CONVERSIONS::MIN_TO_MS;
+    return S_TIMERS::TIME_OFF_ANTIFREEZE_MIN * CONVERSIONS::MIN_TO_MS;
 #else
   return S_TIMERS::TIME_OFF_MIN * CONVERSIONS::MIN_TO_MS;
 #endif
@@ -196,26 +211,34 @@ uint32_t getTimeOff(uint16_t potValue) {
 void logDebug(unsigned long now, unsigned long currentTimeOff) {
 #if DEBUG_MODE_ENABLED
   static uint32_t lastLog = 0;
-  if (now - lastLog >= 1000) {
+  if (now - lastLog >= S_TIMERS::INTERVAL_DEBUG_LOG) {
+    lastLog = now;
 
 #if LEVEL_SENSOR_ENABLED
     int level = digitalRead(PIN::LEVEL_SENSOR);
 #else
     int level = -1;
 #endif
-    lastLog = now;
+
+#if FAST_TEST_MODE_ENABLED
+    uint32_t toffDisplay = currentTimeOff / CONVERSIONS::SEC_TO_MS;
+    const char* unit = "sec";
+    uint32_t current_time_final_to_display = (now - S_TIMERS::STARTUP_DELAY_FAST_TEST) / CONVERSIONS::SEC_TO_MS;
+#else
+    uint32_t toffDisplay = currentTimeOff / CONVERSIONS::MIN_TO_MS;
+    const char* unit = "min";
+    uint32_t current_time_final_to_display = (now - S_TIMERS::STARTUP_DELAY_MS) / CONVERSIONS::SEC_TO_MS;
+#endif
+
     snprintf(buf, sizeof(buf),
-             "[%lus] State:%d | Relay:%d | Level:%d | Pot:%d | T_off:%lu min or sec",
-             (now / 1000) - ((S_TIMERS::STARTUP_DELAY_MS) / 1000),
-             currentState,
-             digitalRead(PIN::RELAY),
+             "[%lus] State:%d | Relay:%d | Level:%d | Pot:%d | T_off:%lu %s",
+             current_time_final_to_display,
+             static_cast<int>(currentState),
+             !(digitalRead(PIN::RELAY)),
              level,
              POT_ENABLED ? analogRead(PIN::POT) : -1,
-#if FAST_TEST_MODE_ENABLED
-             currentTimeOff / 1000);
-#else
-             currentTimeOff / 60000);
-#endif
+             toffDisplay,
+             unit);
 
     LOG_LN(buf);
   }
